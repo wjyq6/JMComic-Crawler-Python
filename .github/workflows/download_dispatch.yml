@@ -1,4 +1,4 @@
-name: 下载JM本子 (dispatch)
+name: 下载并合并JM内容 (dispatch)
 
 on:
   workflow_dispatch:
@@ -31,9 +31,19 @@ on:
         default: ''
         required: false
 
+      OUTPUT_FORMAT:
+        type: choice
+        description: 选择输出格式
+        options:
+          - pdf
+          - png
+          - both
+        default: 'pdf'
+        required: true
+
       ZIP_NAME:
         type: string
-        default: 本子.tar.gz
+        default: jm_output.tar.gz
         description: 压缩文件名称
         required: false
 
@@ -43,83 +53,170 @@ on:
         description: 上传文件名称
         required: false
 
-#      JM_USERNAME:
-#        type: string
-#        default: ''
-#        description: '禁漫帐号（不建议使用，用户名和密码会泄露在日志中。最好用secrets）'
-#        required: false
-#
-#      JM_PASSWORD:
-#        type: string
-#        default: ''
-#        description: '禁漫密码（不建议使用，用户名和密码会泄露在日志中。最好用secrets）'
-#        required: false
+env:
+  # 工作流输入
+  JM_ALBUM_IDS: ${{ github.event.inputs.JM_ALBUM_IDS }}
+  JM_PHOTO_IDS: ${{ github.event.inputs.JM_PHOTO_IDS }}
+  DIR_RULE: ${{ github.event.inputs.DIR_RULE }}
+  CLIENT_IMPL: ${{ github.event.inputs.CLIENT_IMPL }}
+  ZIP_NAME: ${{ github.event.inputs.ZIP_NAME }}
+  UPLOAD_NAME: ${{ github.event.inputs.UPLOAD_NAME }}
+  IMAGE_SUFFIX: ${{ github.event.inputs.IMAGE_SUFFIX }}
+  OUTPUT_FORMAT: ${{ github.event.inputs.OUTPUT_FORMAT }}
 
+  # 登录相关secrets
+  JM_USERNAME: ${{ secrets.JM_USERNAME }}
+  JM_PASSWORD: ${{ secrets.JM_PASSWORD }}
+
+  # 邮件相关secrets
+  EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+  EMAIL_TO: ${{ secrets.EMAIL_TO }}
+  EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+  EMAIL_TITLE: ${{ secrets.EMAIL_TITLE }}
+  EMAIL_CONTENT: ${{ secrets.EMAIL_CONTENT }}
+
+  # 固定值
+  JM_DOWNLOAD_DIR: /home/runner/work/jmcomic/download/
+  MERGE_SCRIPT_PATH: /home/runner/work/jmcomic/merge_script.py
 
 jobs:
-  crawler:
+  crawler-and-merge:
     runs-on: ubuntu-latest
-    env:
-      # 工作流输入
-      JM_ALBUM_IDS: ${{ github.event.inputs.JM_ALBUM_IDS }}
-      JM_PHOTO_IDS: ${{ github.event.inputs.JM_PHOTO_IDS }}
-      DIR_RULE: ${{ github.event.inputs.DIR_RULE }}
-      CLIENT_IMPL: ${{ github.event.inputs.CLIENT_IMPL }}
-      ZIP_NAME: ${{ github.event.inputs.ZIP_NAME }}
-      UPLOAD_NAME: ${{ github.event.inputs.UPLOAD_NAME }}
-      IMAGE_SUFFIX: ${{ github.event.inputs.IMAGE_SUFFIX }}
-
-      # 登录相关secrets
-      JM_USERNAME: ${{ secrets.JM_USERNAME }}
-      JM_PASSWORD: ${{ secrets.JM_PASSWORD }}
-
-      # 邮件相关secrets
-      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-      EMAIL_TO: ${{ secrets.EMAIL_TO }}
-      EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-      EMAIL_TITLE: ${{ secrets.EMAIL_TITLE }}
-      EMAIL_CONTENT: ${{ secrets.EMAIL_CONTENT }}
-
-      # 固定值
-      JM_DOWNLOAD_DIR: /home/runner/work/jmcomic/download/
-
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install Dependency
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+          # 安装图片处理所需的库
+          pip install Pillow reportlab img2pdf
 
-      - name: 安装jmcomic（pip）
-        if: ${{ github.ref != 'refs/heads/dev' }}
+      - name: 安装jmcomic
         run: |
           pip install jmcomic -i https://pypi.org/project --upgrade
-
-      - name: 安装jmcomic（local）
-        if: ${{ github.ref == 'refs/heads/dev' }}
-        run: |
-          pip install -e ./
 
       - name: 运行下载脚本
         run: |
           cd ./usage/
           python workflow_download.py
 
-      - name: 压缩文件
+      - name: 生成合并脚本
+        run: |
+          cat > $MERGE_SCRIPT_PATH << 'EOF'
+          import os
+          import sys
+          from PIL import Image
+          import img2pdf
+          import glob
+
+          download_dir = os.environ.get('JM_DOWNLOAD_DIR', '/home/runner/work/jmcomic/download/')
+          output_format = os.environ.get('OUTPUT_FORMAT', 'pdf').lower()
+
+          # 获取所有专辑文件夹
+          album_folders = [f for f in os.listdir(download_dir) if os.path.isdir(os.path.join(download_dir, f)) and not f.startswith('.')]
+          album_folders.sort()
+
+          print(f"Found {len(album_folders)} album folders: {album_folders}")
+
+          for index, album_folder in enumerate(album_folders, start=1):
+              album_path = os.path.join(download_dir, album_folder)
+              print(f"Processing album {index}: {album_folder}")
+
+              # 收集所有图片文件
+              image_extensions = ('*.png', '*.jpg', '*.jpeg', '*.webp')
+              image_files = []
+              
+              for ext in image_extensions:
+                  image_files.extend(glob.glob(os.path.join(album_path, '**', ext), recursive=True))
+              
+              image_files.sort()
+              
+              print(f"Found {len(image_files)} images in {album_folder}")
+
+              if not image_files:
+                  print(f"No images found in {album_folder}, skipping.")
+                  continue
+
+              # 按选择的格式处理
+              base_output_name = f"{index:03d}_{album_folder}"
+
+              if output_format in ['pdf', 'both']:
+                  # 转换为PDF
+                  pdf_output_path = os.path.join(download_dir, f"{base_output_name}.pdf")
+                  
+                  try:
+                      # 使用img2pdf库
+                      with open(pdf_output_path, "wb") as f:
+                          f.write(img2pdf.convert([Image.open(img).filename for img in image_files]))
+                      print(f"PDF created: {pdf_output_path}")
+                  except Exception as e:
+                      print(f"Error creating PDF: {e}")
+
+              if output_format in ['png', 'both']:
+                  # 转换为长图 (PNG)
+                  # 首先计算总高度和最大宽度
+                  images = [Image.open(img) for img in image_files]
+                  widths, heights = zip(*(img.size for img in images))
+                  
+                  total_height = sum(heights)
+                  max_width = max(widths)
+                  
+                  # 创建长图
+                  long_img = Image.new('RGB', (max_width, total_height))
+                  
+                  y_offset = 0
+                  for img in images:
+                      long_img.paste(img, (0, y_offset))
+                      y_offset += img.size[1]
+                  
+                  png_output_path = os.path.join(download_dir, f"{base_output_name}_long.png")
+                  long_img.save(png_output_path, 'PNG')
+                  print(f"Long image created: {png_output_path}")
+
+                  # 清理打开的图片
+                  for img in images:
+                      img.close()
+
+          EOF
+
+      - name: 执行合并脚本
+        run: |
+          python $MERGE_SCRIPT_PATH
+
+      - name: 创建输出目录（仅包含合并后的文件）
         run: |
           cd $JM_DOWNLOAD_DIR
-          tar -zcvf "../$ZIP_NAME" ./
+          # 创建 cleaned_output 目录
+          mkdir -p cleaned_output
+          
+          # 移动合并后的文件 (PDF 和 PNG)
+          find . -maxdepth 1 -name "*.pdf" -exec mv {} cleaned_output/ \;
+          find . -maxdepth 1 -name "*_long.png" -exec mv {} cleaned_output/ \;
+          
+          # 可选：删除原始下载的图片文件夹以节省空间
+          find . -maxdepth 1 -type d -name "*" ! -name "cleaned_output" ! -name "." -exec rm -rf {} \; || true
+
+      - name: 压缩最终结果
+        run: |
+          cd $JM_DOWNLOAD_DIR/cleaned_output
+          tar -zcvf "../$ZIP_NAME" ./*
           mv "../$ZIP_NAME" .
 
-      - name: 上传结果
+      - name: 上传生成的结果
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.UPLOAD_NAME }}
-          path: ${{ env.JM_DOWNLOAD_DIR }}/${{ env.ZIP_NAME }}
+          path: ${{ env.JM_DOWNLOAD_DIR }}/cleaned_output/${{ env.ZIP_NAME }}
           if-no-files-found: error
           retention-days: 90
+
+      - name: 发送邮件通知
+        if: always() && env.EMAIL_TO != ''
+        run: |
+          echo "工作流执行完成" | mail -s "JM下载工作流完成" -a "From: $EMAIL_FROM" "$EMAIL_TO"

@@ -250,7 +250,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      # - name: 发送邮件通知
-      #   if: always() && env.EMAIL_TO != ''
-      #   run: |
-      #     echo "工作流执行完成" | mail -s "JM下载工作流完成" -a "From: $EMAIL_FROM" "$EMAIL_TO"
+      - name: 发送邮件通知
+        if: always() && env.EMAIL_TO != ''
+        run: |
+          echo "工作流执行完成" | mail -s "JM下载工作流完成" -a "From: $EMAIL_FROM" "$EMAIL_TO"

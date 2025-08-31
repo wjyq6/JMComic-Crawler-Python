@@ -212,7 +212,14 @@ jobs:
           
           # 可选：删除原始下载的图片文件夹以节省空间
           find . -maxdepth 1 -type d -name "*" ! -name "cleaned_output" ! -name "." -exec rm -rf {} \; || true
-
+      - name: 检查是否有文件可压缩
+        run: |
+          if [ -z "$(ls -A $JM_DOWNLOAD_DIR/cleaned_output/)" ]; then
+            echo "错误：cleaned_output 目录为空，无法压缩！"
+            exit 1
+          else
+            echo "发现文件，开始压缩..."
+          fi
       - name: 压缩最终结果
         run: |
           cd $JM_DOWNLOAD_DIR/cleaned_output

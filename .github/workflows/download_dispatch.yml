@@ -114,6 +114,7 @@ jobs:
           from PIL import Image
           import img2pdf
           import glob
+          import re
 
           download_dir = os.environ.get('JM_DOWNLOAD_DIR', '/home/runner/work/jmcomic/download/')
           output_format = os.environ.get('OUTPUT_FORMAT', 'pdf').lower()
@@ -124,64 +125,74 @@ jobs:
 
           print(f"Found {len(album_folders)} album folders: {album_folders}")
 
-          for index, album_folder in enumerate(album_folders, start=1):
+          # 用于自然排序（让 Chapter 1, Chapter 2... Chapter 10 顺序正确）
+          def natural_sort_key(s):
+              return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+
+          for album_index, album_folder in enumerate(album_folders, start=1):
               album_path = os.path.join(download_dir, album_folder)
-              print(f"Processing album {index}: {album_folder}")
+              print(f"Processing album {album_index}: {album_folder}")
 
-              # 收集所有图片文件
-              image_extensions = ('*.png', '*.jpg', '*.jpeg', '*.webp')
-              image_files = []
-              
-              for ext in image_extensions:
-                  image_files.extend(glob.glob(os.path.join(album_path, '**', ext), recursive=True))
-              
-              image_files.sort()
-              
-              print(f"Found {len(image_files)} images in {album_folder}")
+              # 获取本子下的所有章节文件夹
+              chapter_folders = [f for f in os.listdir(album_path) if os.path.isdir(os.path.join(album_path, f))]
+              chapter_folders.sort(key=natural_sort_key)  # 使用自然排序
 
-              if not image_files:
-                  print(f"No images found in {album_folder}, skipping.")
-                  continue
+              print(f"Found {len(chapter_folders)} chapters: {chapter_folders}")
 
-              # 按选择的格式处理
-              base_output_name = f"{index:03d}_{album_folder}"
+              for chapter_index, chapter_folder in enumerate(chapter_folders, start=1):
+                  chapter_path = os.path.join(album_path, chapter_folder)
+                  print(f"  Processing chapter {chapter_index}: {chapter_folder}")
 
-              if output_format in ['pdf', 'both']:
-                  # 转换为PDF
-                  pdf_output_path = os.path.join(download_dir, f"{base_output_name}.pdf")
+                  # 收集当前章节下的所有图片文件
+                  image_extensions = ('*.png', '*.jpg', '*.jpeg', '*.webp')
+                  image_files = []
                   
-                  try:
-                      # 使用img2pdf库
-                      with open(pdf_output_path, "wb") as f:
-                          f.write(img2pdf.convert([Image.open(img).filename for img in image_files]))
-                      print(f"PDF created: {pdf_output_path}")
-                  except Exception as e:
-                      print(f"Error creating PDF: {e}")
+                  for ext in image_extensions:
+                      image_files.extend(glob.glob(os.path.join(chapter_path, '**', ext), recursive=True))
+                  
+                  image_files.sort(key=natural_sort_key)  # 图片也按自然顺序排序
+                  
+                  print(f"  Found {len(image_files)} images in this chapter")
 
-              if output_format in ['png', 'both']:
-                  # 转换为长图 (PNG)
-                  # 首先计算总高度和最大宽度
-                  images = [Image.open(img) for img in image_files]
-                  widths, heights = zip(*(img.size for img in images))
-                  
-                  total_height = sum(heights)
-                  max_width = max(widths)
-                  
-                  # 创建长图
-                  long_img = Image.new('RGB', (max_width, total_height))
-                  
-                  y_offset = 0
-                  for img in images:
-                      long_img.paste(img, (0, y_offset))
-                      y_offset += img.size[1]
-                  
-                  png_output_path = os.path.join(download_dir, f"{base_output_name}_long.png")
-                  long_img.save(png_output_path, 'PNG')
-                  print(f"Long image created: {png_output_path}")
+                  if not image_files:
+                      print(f"  No images found in {chapter_folder}, skipping.")
+                      continue
 
-                  # 清理打开的图片
-                  for img in images:
-                      img.close()
+                  # 按选择的格式处理
+                  base_output_name = f"{album_index:03d}_{album_folder}_Chapter{chapter_index:03d}_{chapter_folder}"
+
+                  if output_format in ['pdf', 'both']:
+                      # 为当前章节转换为PDF
+                      pdf_output_path = os.path.join(download_dir, f"{base_output_name}.pdf")
+                      
+                      try:
+                          with open(pdf_output_path, "wb") as f:
+                              f.write(img2pdf.convert([Image.open(img).filename for img in image_files]))
+                          print(f"  PDF created: {pdf_output_path}")
+                      except Exception as e:
+                          print(f"  Error creating PDF: {e}")
+
+                  if output_format in ['png', 'both']:
+                      # 为当前章节转换为长图 (PNG)
+                      images = [Image.open(img) for img in image_files]
+                      widths, heights = zip(*(img.size for img in images))
+                      
+                      total_height = sum(heights)
+                      max_width = max(widths)
+                      
+                      long_img = Image.new('RGB', (max_width, total_height))
+                      
+                      y_offset = 0
+                      for img in images:
+                          long_img.paste(img, (0, y_offset))
+                          y_offset += img.size[1]
+                      
+                      png_output_path = os.path.join(download_dir, f"{base_output_name}_long.png")
+                      long_img.save(png_output_path, 'PNG')
+                      print(f"  Long image created: {png_output_path}")
+
+                      for img in images:
+                          img.close()
 
           EOF
 

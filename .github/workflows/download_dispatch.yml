@@ -7,30 +7,25 @@ on:
         type: string
         description: 本子id（多个id用-隔开，如 '123-456-789'）
         required: false
-
       JM_PHOTO_IDS:
         type: string
         description: 章节id（单独下载章节，多个id同上）
         required: false
-
       CLIENT_IMPL:
         type: string
         description: 客户端类型（client.impl），下载失败时，你可以尝试填入此项重试。'api' 表示移动端，'html' 表示网页端。
         default: ''
         required: false
-
       IMAGE_SUFFIX:
         type: string
         description: 图片后缀（download.cache.suffix），默认为空，表示不做图片格式转换。可填入例如 'png' 'jpg'
         default: ''
         required: false
-
       DIR_RULE:
         type: string
         description: 下载文件夹规则（dir_rule.rule）。默认使用配置文件的 'Bd_Aauthor_Atitle_Pindex'。
         default: ''
         required: false
-
       OUTPUT_FORMAT:
         type: choice
         description: 选择输出格式
@@ -40,13 +35,11 @@ on:
           - both
         default: 'pdf'
         required: true
-
       ZIP_NAME:
         type: string
         default: jm_output.tar.gz
         description: 压缩文件名称
         required: false
-
       UPLOAD_NAME:
         type: string
         default: Click me to download
@@ -64,7 +57,7 @@ env:
   IMAGE_SUFFIX: ${{ github.event.inputs.IMAGE_SUFFIX }}
   OUTPUT_FORMAT: ${{ github.event.inputs.OUTPUT_FORMAT }}
 
-  # 登录相关secrets（移除了邮件相关secrets）
+  # 登录相关secrets
   JM_USERNAME: ${{ secrets.JM_USERNAME }}
   JM_PASSWORD: ${{ secrets.JM_PASSWORD }}
 
@@ -182,34 +175,40 @@ jobs:
                   if output_format in ['pdf', 'both']:
                       pdf_output_path = os.path.join(download_dir, f"{base_output_name}.pdf")
                       try:
+                          # 修正：确保使用正确的图片路径
+                          image_paths = [img for img in image_files]
                           with open(pdf_output_path, "wb") as f:
-                              f.write(img2pdf.convert([Image.open(img).filename for img in image_files]))
+                              f.write(img2pdf.convert(image_paths))
                           print(f"    PDF已创建: {pdf_output_path}")
                       except Exception as e:
                           print(f"    创建PDF时出错: {e}")
           
                   if output_format in ['png', 'both']:
-                      images = [Image.open(img)极 for img in image_files]
-                      widths, heights = zip(*(img.size for img in images))
-                      total_height = sum(heights)
-                     极 max_width = max(widths)
-                      long_img = Image.new('RGB', (max_width, total_height))
-                      y_offset = 0
-                      for img in images:
-                          long_img.paste(img, (0, y_offset))
-                          y_offset += img.size[1]
-                      png_output_path = os.path.join(download_dir, f"{base_output_name}_long.png")
-                      long_img.save(png_output_path, 'PNG')
-                      print(f"    长图已创建: {png_output_path}")
-                      for img in images:
-                          img.close()
+                      try:
+                          # 修正：移除多余的"极"字符，正确打开图片
+                          images = [Image.open(img) for img in image_files]
+                          widths, heights = zip(*(img.size for img in images))
+                          total_height = sum(heights)
+                          max_width = max(widths)
+                          long_img = Image.new('RGB', (max_width, total_height))
+                          y_offset = 0
+                          for img in images:
+                              long_img.paste(img, (0, y_offset))
+                              y_offset += img.size[1]
+                          png_output_path = os.path.join(download_dir, f"{base_output_name}_long.png")
+                          long_img.save(png_output_path, 'PNG')
+                          print(f"    长图已创建: {png_output_path}")
+                          for img in images:
+                              img.close()
+                      except Exception as e:
+                          print(f"    创建长图时出错: {e}")
           EOF
 
       - name: 执行合并脚本
         run: |
           python $MERGE_SCRIPT_PATH
 
-      - name: 创建输出目录（仅包含合并后的极文件）
+      - name: 创建输出目录（仅包含合并后的文件）
         run: |
           cd $JM_DOWNLOAD_DIR
           # 创建 cleaned_output 目录
@@ -221,14 +220,16 @@ jobs:
           
           # 可选：删除原始下载的图片文件夹以节省空间
           find . -maxdepth 1 -type d -name "*" ! -name "cleaned_output" ! -name "." -exec rm -rf {} \; || true
+
       - name: 检查是否有文件可压缩
         run: |
-          if [ -z "$(ls -A $JM极_DOWNLOAD_DIR/cleaned_output/)" ]; then
+          if [ -z "$(ls -A $JM_DOWNLOAD_DIR/cleaned_output/)" ]; then
             echo "错误：cleaned_output 目录为空，无法压缩！"
             exit 1
           else
             echo "发现文件，开始压缩..."
           fi
+
       - name: 压缩最终结果
         run: |
           cd $JM_DOWNLOAD_DIR/cleaned_output

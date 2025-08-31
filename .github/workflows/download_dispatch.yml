@@ -7,25 +7,30 @@ on:
         type: string
         description: 本子id（多个id用-隔开，如 '123-456-789'）
         required: false
+
       JM_PHOTO_IDS:
         type: string
         description: 章节id（单独下载章节，多个id同上）
         required: false
+
       CLIENT_IMPL:
         type: string
         description: 客户端类型（client.impl），下载失败时，你可以尝试填入此项重试。'api' 表示移动端，'html' 表示网页端。
         default: ''
         required: false
+
       IMAGE_SUFFIX:
         type: string
         description: 图片后缀（download.cache.suffix），默认为空，表示不做图片格式转换。可填入例如 'png' 'jpg'
         default: ''
         required: false
+
       DIR_RULE:
         type: string
         description: 下载文件夹规则（dir_rule.rule）。默认使用配置文件的 'Bd_Aauthor_Atitle_Pindex'。
         default: ''
         required: false
+
       OUTPUT_FORMAT:
         type: choice
         description: 选择输出格式
@@ -35,11 +40,13 @@ on:
           - both
         default: 'pdf'
         required: true
+
       ZIP_NAME:
         type: string
         default: jm_output.tar.gz
         description: 压缩文件名称
         required: false
+
       UPLOAD_NAME:
         type: string
         default: Click me to download
@@ -60,6 +67,13 @@ env:
   # 登录相关secrets
   JM_USERNAME: ${{ secrets.JM_USERNAME }}
   JM_PASSWORD: ${{ secrets.JM_PASSWORD }}
+
+  # 邮件相关secrets
+  EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+  EMAIL_TO: ${{ secrets.EMAIL_TO }}
+  EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+  EMAIL_TITLE: ${{ secrets.EMAIL_TITLE }}
+  EMAIL_CONTENT: ${{ secrets.EMAIL_CONTENT }}
 
   # 固定值
   JM_DOWNLOAD_DIR: /home/runner/work/jmcomic/download/
@@ -94,114 +108,108 @@ jobs:
 
       - name: 生成合并脚本
         run: |
-          cat > $MERGE_SCRIPT_PATH << 'EOF'
-          import os
-          import sys
-          from PIL import Image
-          import img2pdf
-          import glob
-          import re
-          
-          download_dir = os.environ.get('JM_DOWNLOAD_DIR', '/home/runner/work/jmcomic/download/')
-          output_format = os.environ.get('OUTPUT_FORMAT', 'pdf').lower()
-          
-          # 1. 获取输入ID并按'-'分割成列表
-          env_album_ids = os.environ.get('JM_ALBUM_IDS', '')
-          env_photo_ids = os.environ.get('JM_PHOTO_IDS', '')
-          
-          # 确定要处理的ID列表和类型
-          if env_album_ids:
-              id_list = env_album_ids.split('-')
-              id_type = 'album'
-          elif env_photo_ids:
-              id_list = env_photo_ids.split('-')
-              id_type = 'photo'
-          else:
-              print("错误：未提供 JM_ALBUM_IDS 或 JM_PHOTO_IDS")
-              sys.exit(1)
-          
-          print(f"输入的ID列表（{id_type}）: {id_list}")
-          print(f"ID数量: {len(id_list)}")
-          
-          # 用于自然排序（让 Chapter 1, Chapter 2... Chapter 10 顺序正确）
-          def natural_sort_key(s):
-              return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
-          
-          # 2. 遍历输入ID列表，按其顺序处理
-          for input_index, target_id in enumerate(id_list, start=1):
-              target_id = target_id.strip()
-              found_folder = None
-          
-              # 3. 根据当前ID寻找匹配的文件夹
-              # 假设文件夹命名中包含ID。遍历download_dir下所有文件夹，查找名称中包含当前target_id的文件夹
-              for item in os.listdir(download_dir):
-                  item_path = os.path.join(download_dir, item)
-                  if os.path.isdir(item_path) and target_id in item and not item.startswith('.'):
-                      found_folder = item
-                      break
-          
-              if not found_folder:
-                  print(f"警告：未找到与ID '{target_id}' 匹配的文件夹，跳过。")
-                  continue
-          
-              album_path = os.path.join(download_dir, found_folder)
-              print(f"处理输入顺序第 {input_index} 项 (ID: {target_id}): 文件夹 '{found_folder}'")
-          
-              # 获取本子下的所有章节文件夹
-              chapter_folders = [f for f in os.listdir(album_path) if os.path.isdir(os.path.join(album_path, f)) and not f.startswith('.')]
-              chapter_folders.sort(key=natural_sort_key)  # 章节内部按自然排序
-              print(f"  找到 {len(chapter_folders)} 个章节: {chapter_folders}")
-          
-              for chapter_index, chapter_folder in enumerate(chapter_folders, start=1):
-                  chapter_path = os.path.join(album_path, chapter_folder)
-                  print(f"    处理章节 {chapter_index}: {chapter_folder}")
-          
-                  # 收集当前章节下的所有图片文件
-                  image_extensions = ('*.png', '*.jpg', '*.jpeg', '*.webp')
-                  image_files = []
-                  for ext in image_extensions:
-                      image_files.extend(glob.glob(os.path.join(chapter_path, '**', ext), recursive=True))
-                  image_files.sort(key=natural_sort_key)  # 图片按自然顺序排序
-          
-                  print(f"    找到 {len(image_files)} 张图片在此章节")
-                  if not image_files:
-                      print(f"    在 {chapter_folder} 中未找到图片，跳过。")
-                      continue
-          
-                  # 按选择的格式处理
-                  # 4. 使用输入顺序编号(input_index)和章节索引(chapter_index)命名
-                  base_output_name = f"{input_index:03d}_ID{target_id}_Chapter{chapter_index:03d}_{chapter_folder}"
-          
-                  if output_format in ['pdf', 'both']:
-                      pdf_output_path = os.path.join(download_dir, f"{base_output_name}.pdf")
-                      try:
-                          # 修正：确保使用正确的图片路径
-                          image_paths = [img for img in image_files]
-                          with open(pdf_output_path, "wb") as f:
-                              f.write(img2pdf.convert(image_paths))
-                          print(f"    PDF已创建: {pdf_output_path}")
-                      except Exception as e:
-                          print(f"    创建PDF时出错: {e}")
-          
-                  if output_format in ['png', 'both']:
-                      try:
-                          # 修正：移除多余的"极"字符，正确打开图片
-                          images = [Image.open(img) for img in image_files]
-                          widths, heights = zip(*(img.size for img in images))
-                          total_height = sum(heights)
-                          max_width = max(widths)
-                          long_img = Image.new('RGB', (max_width, total_height))
-                          y_offset = 0
-                          for img in images:
-                              long_img.paste(img, (0, y_offset))
-                              y_offset += img.size[1]
-                          png_output_path = os.path.join(download_dir, f"{base_output_name}_long.png")
-                          long_img.save(png_output_path, 'PNG')
-                          print(f"    长图已创建: {png_output_path}")
-                          for img in images:
-                              img.close()
-                      except Exception as e:
-                          print(f"    创建长图时出错: {e}")
+                import os
+                import sys
+                from PIL import Image
+                import img2pdf
+                import glob
+                import re
+                
+                download_dir = os.environ.get('JM_DOWNLOAD_DIR', '/home/runner/work/jmcomic/download/')
+                output_format = os.environ.get('OUTPUT_FORMAT', 'pdf').lower()
+                
+                # 1. 获取输入ID并按'-'分割成列表
+                env_album_ids = os.environ.get('JM_ALBUM_IDS', '')
+                env_photo_ids = os.environ.get('JM_PHOTO_IDS', '')
+                
+                # 确定要处理的ID列表和类型
+                if env_album_ids:
+                    id_list = env_album_ids.split('-')
+                    id_type = 'album'
+                elif env_photo_ids:
+                    id_list = env_photo_ids.split('-')
+                    id_type = 'photo'
+                else:
+                    print("错误：未提供 JM_ALBUM_IDS 或 JM_PHOTO_IDS")
+                    sys.exit(1)
+                
+                print(f"输入的ID列表（{id_type}）: {id_list}")
+                print(f"ID数量: {len(id_list)}")
+                
+                # 用于自然排序（让 Chapter 1, Chapter 2... Chapter 10 顺序正确）
+                def natural_sort_key(s):
+                    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+                
+                # 2. 遍历输入ID列表，按其顺序处理
+                for input_index, target_id in enumerate(id_list, start=1):
+                    target_id = target_id.strip()
+                    found_folder = None
+                
+                    # 3. 根据当前ID寻找匹配的文件夹
+                    # 假设文件夹命名中包含ID。遍历download_dir下所有文件夹，查找名称中包含当前target_id的文件夹
+                    for item in os.listdir(download_dir):
+                        item_path = os.path.join(download_dir, item)
+                        if os.path.isdir(item_path) and target_id in item and not item.startswith('.'):
+                            found_folder = item
+                            break
+                
+                    if not found_folder:
+                        print(f"警告：未找到与ID '{target_id}' 匹配的文件夹，跳过。")
+                        continue
+                
+                    album_path = os.path.join(download_dir, found_folder)
+                    print(f"处理输入顺序第 {input_index} 项 (ID: {target_id}): 文件夹 '{found_folder}'")
+                
+                    # 获取本子下的所有章节文件夹
+                    chapter_folders = [f for f in os.listdir(album_path) if os.path.isdir(os.path.join(album_path, f)) and not f.startswith('.')]
+                    chapter_folders.sort(key=natural_sort_key)  # 章节内部按自然排序
+                    print(f"  找到 {len(chapter_folders)} 个章节: {chapter_folders}")
+                
+                    for chapter_index, chapter_folder in enumerate(chapter_folders, start=1):
+                        chapter_path = os.path.join(album_path, chapter_folder)
+                        print(f"    处理章节 {chapter_index}: {chapter_folder}")
+                
+                        # 收集当前章节下的所有图片文件
+                        image_extensions = ('*.png', '*.jpg', '*.jpeg', '*.webp')
+                        image_files = []
+                        for ext in image_extensions:
+                            image_files.extend(glob.glob(os.path.join(chapter_path, '**', ext), recursive=True))
+                        image_files.sort(key=natural_sort_key)  # 图片按自然顺序排序
+                
+                        print(f"    找到 {len(image_files)} 张图片在此章节")
+                        if not image_files:
+                            print(f"    在 {chapter_folder} 中未找到图片，跳过。")
+                            continue
+                
+                        # 按选择的格式处理
+                        # 4. 使用输入顺序编号(input_index)和章节索引(chapter_index)命名
+                        base_output_name = f"{input_index:03d}_ID{target_id}_Chapter{chapter_index:03d}_{chapter_folder}"
+                
+                        if output_format in ['pdf', 'both']:
+                            pdf_output_path = os.path.join(download_dir, f"{base_output_name}.pdf")
+                            try:
+                                with open(pdf_output_path, "wb") as f:
+                                    f.write(img2pdf.convert([Image.open(img).filename for img in image_files]))
+                                print(f"    PDF已创建: {pdf_output_path}")
+                            except Exception as e:
+                                print(f"    创建PDF时出错: {e}")
+                
+                        if output_format in ['png', 'both']:
+                            images = [Image.open(img) for img in image_files]
+                            widths, heights = zip(*(img.size for img in images))
+                            total_height = sum(heights)
+                            max_width = max(widths)
+                            long_img = Image.new('RGB', (max_width, total_height))
+                            y_offset = 0
+                            for img in images:
+                                long_img.paste(img, (0, y_offset))
+                                y_offset += img.size[1]
+                            png_output_path = os.path.join(download_dir, f"{base_output_name}_long.png")
+                            long_img.save(png_output_path, 'PNG')
+                            print(f"    长图已创建: {png_output_path}")
+                            for img in images:
+                                img.close()
+
           EOF
 
       - name: 执行合并脚本
@@ -220,7 +228,6 @@ jobs:
           
           # 可选：删除原始下载的图片文件夹以节省空间
           find . -maxdepth 1 -type d -name "*" ! -name "cleaned_output" ! -name "." -exec rm -rf {} \; || true
-
       - name: 检查是否有文件可压缩
         run: |
           if [ -z "$(ls -A $JM_DOWNLOAD_DIR/cleaned_output/)" ]; then
@@ -229,7 +236,6 @@ jobs:
           else
             echo "发现文件，开始压缩..."
           fi
-
       - name: 压缩最终结果
         run: |
           cd $JM_DOWNLOAD_DIR/cleaned_output
@@ -243,3 +249,8 @@ jobs:
           path: ${{ env.JM_DOWNLOAD_DIR }}/cleaned_output/${{ env.ZIP_NAME }}
           if-no-files-found: error
           retention-days: 90
+
+      # - name: 发送邮件通知
+      #   if: always() && env.EMAIL_TO != ''
+      #   run: |
+      #     echo "工作流执行完成" | mail -s "JM下载工作流完成" -a "From: $EMAIL_FROM" "$EMAIL_TO"
